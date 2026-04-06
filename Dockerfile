@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 ENTRYPOINT ["eventor-mcp"]
 
 # HTTP+SSE for reverse proxies (Coolify, Traefik). Stdio MCP is not usable behind HTTP routing.
-# Coolify often sets PORT=80; override Traefik loadbalancer.server.port to match this port.
+# Do not use shell-form CMD: ENTRYPOINT is eventor-mcp, so "sh" would be parsed as a Typer subcommand.
+# Listen port: env PORT (Coolify often sets 80); default 8000 is applied in Python if PORT is unset.
 EXPOSE 8000
-CMD ["sh", "-c", "exec eventor-mcp serve-sse --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["serve-sse", "--host", "0.0.0.0"]
