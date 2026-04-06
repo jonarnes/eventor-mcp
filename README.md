@@ -169,6 +169,8 @@ See `.env.example` for:
 
 Source: [github.com/jonarnes/eventor-mcp](https://github.com/jonarnes/eventor-mcp). Do not commit `.env` or API keys.
 
+**GitHub Actions:** A workflow template lives in [`scripts/github-actions-ci.yml.example`](scripts/github-actions-ci.yml.example). Copy it to `.github/workflows/ci.yml` and commit (from the GitHub UI if needed). Pushing workflow files via HTTPS requires a Personal Access Token with the **workflow** scope.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
