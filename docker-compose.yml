@@ -1,0 +1,15 @@
+services:
+  eventor-mcp:
+    build: .
+    image: eventor-mcp:local
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    environment:
+      LOG_DIR: /var/log/eventor-mcp
+    volumes:
+      - eventor_mcp_logs:/var/log/eventor-mcp
+
+volumes:
+  eventor_mcp_logs:

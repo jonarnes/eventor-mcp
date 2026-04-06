@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "eventor-mcp"
+version = "0.1.0"
+description = "MCP server for the Norwegian Eventor orienteering API"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Eventor MCP contributors" }]
+keywords = ["mcp", "eventor", "orientering", "api"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "mcp>=1.0.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.0",
+  "pydantic-settings>=2.0",
+  "cachetools>=5.0",
+  "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+eventor-mcp = "eventor_mcp.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/jonarnes/eventor-mcp"
+Documentation = "https://github.com/jonarnes/eventor-mcp#readme"
+Repository = "https://github.com/jonarnes/eventor-mcp"
+Issues = "https://github.com/jonarnes/eventor-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eventor_mcp"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[tool.hatch.build.targets.sdist]
+include = ["src/eventor_mcp", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
