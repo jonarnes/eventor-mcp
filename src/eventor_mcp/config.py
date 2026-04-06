@@ -42,6 +42,9 @@ class Settings(BaseSettings):
         default=500, ge=1, validation_alias="STATS_MAX_EVENTS_IN_SUMMARY"
     )
 
+    mcp_bearer_token: str = Field(default="", validation_alias="EVENTOR_MCP_BEARER_TOKEN")
+    mcp_public_url: str = Field(default="", validation_alias="EVENTOR_MCP_PUBLIC_URL")
+
     @field_validator("eventor_base_url")
     @classmethod
     def strip_slash(cls, v: str) -> str:

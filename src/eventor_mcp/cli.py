@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from typing import Any
 
@@ -10,7 +11,9 @@ import typer
 from eventor_mcp.config import Settings
 from eventor_mcp.logging_config import setup_logging
 from eventor_mcp.runtime import get_runtime, init_runtime, reset_runtime
-from eventor_mcp.server import mcp
+from eventor_mcp.server import create_mcp
+
+log = logging.getLogger(__name__)
 
 app = typer.Typer(no_args_is_help=True, help="Eventor MCP server and CLI helpers.")
 test_app = typer.Typer(help="Quick API checks without running the MCP host.")
@@ -26,6 +29,7 @@ def serve() -> None:
     settings = Settings()
     setup_logging(settings)
     init_runtime(settings)
+    mcp = create_mcp(settings, http_auth=False)
     try:
         mcp.run(transport="stdio")
     finally:
@@ -53,8 +57,17 @@ def serve_sse(
     settings = Settings()
     setup_logging(settings)
     init_runtime(settings)
+    try:
+        mcp = create_mcp(settings, http_auth=True)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
     mcp.settings.host = host
     mcp.settings.port = port
+    if settings.mcp_bearer_token.strip():
+        log.info(
+            "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
+        )
     try:
         mcp.run(transport="sse", mount_path=mount_path)
     finally:
@@ -71,8 +84,17 @@ def serve_http(
     settings = Settings()
     setup_logging(settings)
     init_runtime(settings)
+    try:
+        mcp = create_mcp(settings, http_auth=True)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
     mcp.settings.host = host
     mcp.settings.port = port
+    if settings.mcp_bearer_token.strip():
+        log.info(
+            "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
+        )
     try:
         mcp.run(transport="streamable-http")
     finally:
