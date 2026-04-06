@@ -5,6 +5,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from eventor_mcp.config import Settings
+from eventor_mcp.http_discovery import register_mcp_discovery_routes
 from eventor_mcp.mcp_bearer_auth import http_mcp_auth_from_settings
 from eventor_mcp.runtime import get_runtime
 from eventor_mcp.statistics import (
@@ -317,5 +318,6 @@ def create_mcp(settings: Settings, *, http_auth: bool = False) -> FastMCP:
         auth=auth,
         token_verifier=verifier,
     )
+    register_mcp_discovery_routes(mcp, settings)
     register_eventor_tools(mcp)
     return mcp

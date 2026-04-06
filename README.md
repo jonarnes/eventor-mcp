@@ -115,11 +115,13 @@ Gjør slik:
 
 3. Gjør serveren **tilgjengelig** der Le Chat kan nå den (tunnel mot `127.0.0.1:8000` om nødvendig). **Ikke** eksponer `0.0.0.0` på åpent internett uten ekstra sikring — kall mot MCP bruker din Eventor-nøkkel.
 
-4. I **Le Chat**, legg til en **custom MCP connector** og lim inn basis-URL / MCP-URL slik Mistral beskriver i hjelpesidene (produktet endrer seg; følg deres siste steg):
+4. Serveren svarer på **MCP discovery**: `GET /.well-known/mcp/server-card` (og `/server-card/`, `server-card.json`) med en **Server Card** som peker til `/sse` og `/mcp`. Dette matcher det mange klienter (inkl. Mistral) spør etter før tilkobling.
+
+5. I **Le Chat**, legg til en **custom MCP connector** og lim inn basis-URL / MCP-URL slik Mistral beskriver i hjelpesidene (produktet endrer seg; følg deres siste steg):
    - [Configuring a Custom Connector](https://help.mistral.ai/en/articles/393572-configuring-a-custom-connector)
    - [Using my MCP Connectors with le Chat](https://help.mistral.ai/en/articles/393511-using-my-mcp-connectors-with-le-chat)
 
-5. **Alternativ:** Bygg en egen «chat» med [Mistral Agents API + MCP](https://docs.mistral.ai/agents/mcp/) i Python og koble **stdio** mot `eventor-mcp serve` (samme mønster som i Mistral-dokumentasjonen med `StdioServerParameters`).
+6. **Alternativ:** Bygg en egen «chat» med [Mistral Agents API + MCP](https://docs.mistral.ai/agents/mcp/) i Python og koble **stdio** mot `eventor-mcp serve` (samme mønster som i Mistral-dokumentasjonen med `StdioServerParameters`).
 
 ## CLI testing
 
