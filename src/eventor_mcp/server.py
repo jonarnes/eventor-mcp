@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from ipaddress import ip_address
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from eventor_mcp.config import Settings
 from eventor_mcp.http_discovery import register_mcp_discovery_routes
@@ -22,6 +25,70 @@ _INSTRUCTIONS = (
 
 def _parsed(data: Any) -> dict[str, Any]:
     return {"data": data}
+
+
+def _dedupe_str_list(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _http_transport_security(settings: Settings) -> TransportSecuritySettings:
+    """
+    FastMCP enables localhost-only DNS rebinding protection when constructed with the default
+    ``host=127.0.0.1``. CLI then sets ``bind host`` to 0.0.0.0, but transport_security is
+    unchanged, so reverse-proxy requests with ``Host: your.public.name`` were rejected (421) and
+    logged as invalid. For HTTP transports we either allow hosts derived from
+    ``EVENTOR_MCP_PUBLIC_URL`` or disable the check when no public URL is configured.
+    """
+
+    local_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    local_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+    allowed_hosts = list(local_hosts)
+    allowed_origins = list(local_origins)
+
+    pub = settings.mcp_public_url.strip()
+    if not pub:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    parsed = urlparse(pub)
+    raw_host = parsed.hostname
+    if not raw_host:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    try:
+        ip = ip_address(raw_host)
+    except ValueError:
+        host_key = raw_host
+    else:
+        host_key = f"[{ip.compressed}]" if ip.version == 6 else str(ip)
+
+    allowed_hosts.extend([host_key, f"{host_key}:*"])
+
+    scheme = (parsed.scheme or "https").lower()
+    hn = parsed.hostname or host_key
+    port = parsed.port
+    if port is not None and not (
+        (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
+    ):
+        origin_host = f"{hn}:{port}"
+    else:
+        origin_host = hn
+    allowed_origins.append(f"{scheme}://{origin_host}")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_dedupe_str_list(allowed_hosts),
+        allowed_origins=_dedupe_str_list(allowed_origins),
+    )
 
 
 def register_eventor_tools(mcp: FastMCP) -> None:
@@ -312,11 +379,14 @@ def create_mcp(settings: Settings, *, http_auth: bool = False) -> FastMCP:
     else:
         auth, verifier = None, None
 
+    transport_security = _http_transport_security(settings) if http_auth else None
+
     mcp = FastMCP(
         "eventor",
         instructions=_INSTRUCTIONS,
         auth=auth,
         token_verifier=verifier,
+        transport_security=transport_security,
     )
     register_mcp_discovery_routes(mcp, settings)
     register_eventor_tools(mcp)
