@@ -145,7 +145,9 @@ eventor-mcp test get /api/events --query-json '{"fromDate":"2025-01-01 00:00:00"
 
 ## Docker
 
-Build and run the MCP server (stdio; interactive flags are enabled in `docker-compose.yml`):
+The **image default** is **`serve-sse` on `0.0.0.0`** using **`PORT`** (default `8000`) so it works behind Coolify, Traefik, or similar. Override the command if you need stdio or `serve-http`.
+
+Local **stdio** (Cursor-style) via Compose uses `command: ["serve"]`:
 
 ```bash
 docker compose up --build
@@ -159,6 +161,13 @@ docker compose run --rm -it eventor-mcp test get /api/events --query-json '{"fro
 ```
 
 Mount or inject `EVENTOR_API_KEY` via `env_file` or your orchestrator’s secrets. Log files are written to the named volume `eventor_mcp_logs` when `LOG_DIR=/var/log/eventor-mcp` (set in `docker-compose.yml`).
+
+### Coolify / Traefik
+
+1. **Traefik `loadbalancer.server.port`** must equal the port the **container listens on**. If Coolify sets `PORT=80`, use `loadbalancer.server.port=80`. If you use the image default `PORT=8000`, set Traefik to **8000** (not 80 unless the app binds to 80).
+2. The app must run **`serve-sse`** (or **`serve-http`** if Mistral requires it), **not** `serve` (stdio). The default Dockerfile command is already `serve-sse`.
+3. **`EVENTOR_MCP_PUBLIC_URL`** in `.env` must match the URL Mistral uses (**including `https://`** if you terminate TLS in Traefik). The GUI may show `http://`, but production often uses HTTPS; keep `.env` and Mistral in sync.
+4. In Mistral **API Token** mode, fill **Header value** with the **same secret** as `EVENTOR_MCP_BEARER_TOKEN` (the field is not optional for our server when that env is set).
 
 ## Configuration
 

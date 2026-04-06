@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from typing import Any
 
@@ -14,6 +15,21 @@ from eventor_mcp.runtime import get_runtime, init_runtime, reset_runtime
 from eventor_mcp.server import create_mcp
 
 log = logging.getLogger(__name__)
+
+
+def _listen_port(explicit: int | None, *, fallback: int = 8000) -> int:
+    """Use --port if given; else Coolify/Heroku-style ``PORT`` env; else ``fallback``."""
+
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get("PORT")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return fallback
+
 
 app = typer.Typer(no_args_is_help=True, help="Eventor MCP server and CLI helpers.")
 test_app = typer.Typer(help="Quick API checks without running the MCP host.")
@@ -38,8 +54,12 @@ def serve() -> None:
 
 @app.command("serve-sse")
 def serve_sse(
-    host: str = typer.Option("127.0.0.1", "--host", help="Bind address (use 0.0.0.0 only behind a firewall or tunnel)."),
-    port: int = typer.Option(8000, "--port", help="TCP port for HTTP+SSE."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address (use 0.0.0.0 behind Coolify/Traefik)."),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="TCP port for HTTP+SSE (default: env PORT, e.g. 80 on Coolify, else 8000).",
+    ),
     mount_path: str | None = typer.Option(
         None,
         "--mount-path",
@@ -62,8 +82,10 @@ def serve_sse(
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
+    listen = _listen_port(port)
     mcp.settings.host = host
-    mcp.settings.port = port
+    mcp.settings.port = listen
+    log.info("Listening for MCP SSE on %s:%s", host, listen)
     if settings.mcp_bearer_token.strip():
         log.info(
             "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
@@ -77,7 +99,11 @@ def serve_sse(
 @app.command("serve-http")
 def serve_http(
     host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8000, "--port"),
+    port: int | None = typer.Option(
+        None,
+        "--port",
+        help="TCP port (default: env PORT, else 8000).",
+    ),
 ) -> None:
     """Run the MCP server over streamable HTTP (MCP HTTP transport; use if your client docs ask for it)."""
 
@@ -89,8 +115,10 @@ def serve_http(
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
+    listen = _listen_port(port)
     mcp.settings.host = host
-    mcp.settings.port = port
+    mcp.settings.port = listen
+    log.info("Listening for MCP streamable HTTP on %s:%s", host, listen)
     if settings.mcp_bearer_token.strip():
         log.info(
             "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
