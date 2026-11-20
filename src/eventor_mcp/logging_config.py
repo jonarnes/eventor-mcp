@@ -27,14 +27,22 @@ def setup_logging(settings: Settings) -> None:
 
     if settings.log_dir:
         log_dir = Path(settings.log_dir)
-        log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "eventor-mcp.log"
-        fh = TimedRotatingFileHandler(
-            log_path,
-            when=settings.log_rotation_when,
-            backupCount=settings.log_backup_count,
-            encoding="utf-8",
-        )
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            fh = TimedRotatingFileHandler(
+                log_path,
+                when=settings.log_rotation_when,
+                backupCount=settings.log_backup_count,
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "File logging disabled: cannot write to LOG_DIR=%s (%s); logging to stderr only",
+                log_dir.resolve(),
+                exc,
+            )
+            return
         fh.setLevel(root.level)
         fh.setFormatter(fmt)
         root.addHandler(fh)

@@ -116,7 +116,10 @@ Full upstream responses are bounded before parsing; the summary row limit only
 controls the output, not the upstream query size.
 
 Logs go to stderr and optionally rotating files via `LOG_DIR`. Container stdout
-and stderr are available in Coolify; file logging is optional. Never commit
+and stderr are available in Coolify; file logging is optional. In the Docker
+image, use an absolute writable path such as `LOG_DIR=/home/eventor/logs` (a
+relative path resolves under the root-owned `/app`). If `LOG_DIR` is not
+writable, file logging is skipped with a warning. Never commit
 `.env` or API keys. API output can contain personal data: all holders of the MCP
 Bearer token share the Eventor organisation key's read permissions.
 
