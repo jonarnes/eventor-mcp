@@ -12,10 +12,11 @@ COPY src ./src
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
-ENTRYPOINT ["eventor-mcp"]
+RUN useradd --create-home --uid 10001 eventor \
+    && install -d -o eventor -g eventor /home/eventor/logs
+USER eventor
 
-# HTTP+SSE for reverse proxies (Coolify, Traefik). Stdio MCP is not usable behind HTTP routing.
-# Do not use shell-form CMD: ENTRYPOINT is eventor-mcp, so "sh" would be parsed as a Typer subcommand.
-# Listen port: env PORT (Coolify often sets 80); default 8000 is applied in Python if PORT is unset.
+ENTRYPOINT ["eventor-mcp"]
 EXPOSE 8000
-CMD ["serve-sse", "--host", "0.0.0.0"]
+# Streamable HTTP behind Coolify/Traefik. PORT defaults to 8000.
+CMD ["serve-http", "--host", "0.0.0.0"]

@@ -1,0 +1,5 @@
+# Replace the absolute path if you move the project.
+[mcp_servers.eventor]
+command = "/Users/jonarnes/tempDev/eventor-mcp/scripts/run-local.sh"
+startup_timeout_sec = 20
+tool_timeout_sec = 45

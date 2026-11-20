@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 
 from eventor_mcp.config import Settings
 from eventor_mcp.http_discovery import register_mcp_discovery_routes
 from eventor_mcp.mcp_bearer_auth import http_mcp_auth_from_settings
 from eventor_mcp.runtime import get_runtime
 from eventor_mcp.statistics import (
-    assert_date_range_allowed,
+    resolve_date_range,
     summarize_person_results,
+)
+
+_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True,
 )
 
 _INSTRUCTIONS = (
     "Read-only tools for Norwegian Eventor (orienteering): organisations, events, entries, "
     "starts, results, and derived summaries. Only HTTP GET is used; nothing is written back to "
-    "Eventor. Responses are parsed from Eventor XML into JSON. Access depends on your API key."
+    "Eventor. XML attributes use @name and attributed text uses #text. "
+    "Dates default to the next 30 days for events, entries and starts; person results and "
+    "summaries default to the previous 365 days. Narrow queries when response limits are exceeded. "
+    "Access depends on your API key."
 )
 
 
@@ -42,8 +50,7 @@ def _http_transport_security(settings: Settings) -> TransportSecuritySettings:
     FastMCP enables localhost-only DNS rebinding protection when constructed with the default
     ``host=127.0.0.1``. CLI then sets ``bind host`` to 0.0.0.0, but transport_security is
     unchanged, so reverse-proxy requests with ``Host: your.public.name`` were rejected (421) and
-    logged as invalid. For HTTP transports we either allow hosts derived from
-    ``EVENTOR_MCP_PUBLIC_URL`` or disable the check when no public URL is configured.
+    logged as invalid. HTTP transports allow configured public hosts and loopback hosts only.
     """
 
     local_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
@@ -57,12 +64,14 @@ def _http_transport_security(settings: Settings) -> TransportSecuritySettings:
 
     pub = settings.mcp_public_url.strip()
     if not pub:
-        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True, allowed_hosts=local_hosts, allowed_origins=local_origins
+        )
 
     parsed = urlparse(pub)
     raw_host = parsed.hostname
     if not raw_host:
-        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+        raise ValueError("EVENTOR_MCP_PUBLIC_URL must be an absolute HTTP(S) URL")
 
     try:
         ip = ip_address(raw_host)
@@ -74,7 +83,7 @@ def _http_transport_security(settings: Settings) -> TransportSecuritySettings:
     allowed_hosts.extend([host_key, f"{host_key}:*"])
 
     scheme = (parsed.scheme or "https").lower()
-    hn = parsed.hostname or host_key
+    hn = host_key
     port = parsed.port
     if port is not None and not (
         (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
@@ -94,7 +103,7 @@ def _http_transport_security(settings: Settings) -> TransportSecuritySettings:
 def register_eventor_tools(mcp: FastMCP) -> None:
     """Attach all Eventor tools to a FastMCP instance."""
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_ping() -> dict[str, Any]:
         """Verify the API key and return the organisation linked to it (GET /api/organisation/apiKey)."""
 
@@ -102,7 +111,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/organisation/apiKey")
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_list_organisations(include_properties: bool = False) -> dict[str, Any]:
         """List organisations (clubs, regions, federation) (GET /api/organisations)."""
 
@@ -113,7 +122,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         )
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_get_organisation(organisation_id: int) -> dict[str, Any]:
         """Get one organisation by id (GET /api/organisation/{id})."""
 
@@ -121,10 +130,10 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml(f"/api/organisation/{organisation_id}")
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_list_events(
-        from_date: str = "0000-01-01 00:00:00",
-        to_date: str = "9999-12-31 23:59:59",
+        from_date: str | None = None,
+        to_date: str | None = None,
         organisation_ids: str | None = None,
         event_ids: str | None = None,
         classification_ids: str | None = None,
@@ -150,7 +159,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/events", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_get_event(event_id: int) -> dict[str, Any]:
         """Get a single event (GET /api/event/{eventId})."""
 
@@ -158,7 +167,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml(f"/api/event/{event_id}")
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_list_event_classes(event_id: int, include_entry_fees: bool = False) -> dict[str, Any]:
         """List classes for an event (GET /api/eventclasses)."""
 
@@ -169,13 +178,13 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         )
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_list_entries(
         organisation_ids: str | None = None,
         event_ids: str | None = None,
         event_class_ids: str | None = None,
-        from_event_date: str = "0000-01-01 00:00:00",
-        to_event_date: str = "9999-12-31 23:59:59",
+        from_event_date: str | None = None,
+        to_event_date: str | None = None,
         include_entry_fees: bool = False,
         include_person_element: bool = False,
         include_organisation_element: bool = False,
@@ -202,7 +211,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/entries", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_competitor_count(
         organisation_ids: str,
         event_ids: str | None = None,
@@ -220,7 +229,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/competitorcount", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_results_event(
         event_id: int,
         include_split_times: bool = False,
@@ -236,11 +245,11 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/results/event", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_results_person(
         person_id: int,
-        from_date: str = "0000-01-01 00:00:00",
-        to_date: str = "9999-12-31 23:59:59",
+        from_date: str | None = None,
+        to_date: str | None = None,
         event_ids: str | None = None,
         include_split_times: bool = False,
         top: int | None = None,
@@ -262,7 +271,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/results/person", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_results_organisation(
         organisation_ids: str,
         event_id: int,
@@ -283,7 +292,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/results/organisation", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_starts_event(event_id: int) -> dict[str, Any]:
         """Start list for an event (GET /api/starts/event)."""
 
@@ -291,11 +300,11 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/starts/event", {"eventId": event_id})
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_starts_person(
         person_id: int,
-        from_date: str = "0000-01-01 00:00:00",
-        to_date: str = "9999-12-31 23:59:59",
+        from_date: str | None = None,
+        to_date: str | None = None,
         event_ids: str | None = None,
     ) -> dict[str, Any]:
         """Start times for a person (GET /api/starts/person)."""
@@ -312,7 +321,7 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         data = await client.get_xml("/api/starts/person", params)
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_starts_organisation(organisation_ids: str, event_id: int) -> dict[str, Any]:
         """Start times for organisations in an event (GET /api/starts/organisation)."""
 
@@ -323,11 +332,11 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         )
         return _parsed(data)
 
-    @mcp.tool()
+    @mcp.tool(annotations=_READ_ONLY)
     async def eventor_person_results_summary(
         person_id: int,
-        from_date: str = "0000-01-01 00:00:00",
-        to_date: str = "9999-12-31 23:59:59",
+        from_date: str | None = None,
+        to_date: str | None = None,
         event_ids: str | None = None,
         include_split_times: bool = False,
         include_raw_data: bool = False,
@@ -338,10 +347,11 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         """
 
         settings = get_runtime().settings
-        assert_date_range_allowed(
+        from_date, to_date = resolve_date_range(
             from_date,
             to_date,
-            max_days=settings.stats_max_date_range_days,
+            max_days=min(settings.stats_max_date_range_days, settings.api_max_date_range_days),
+            default_days=365,
         )
 
         params: dict[str, Any] = {
@@ -365,12 +375,15 @@ def register_eventor_tools(mcp: FastMCP) -> None:
         return out
 
 
-def create_mcp(settings: Settings, *, http_auth: bool = False) -> FastMCP:
+def create_mcp(
+    settings: Settings, *, http_auth: bool = False,
+    http_transport: Literal["sse", "streamable-http"] = "streamable-http",
+) -> FastMCP:
     """
     Build a FastMCP server instance.
 
-    When ``http_auth`` is True (SSE / streamable-http), optional Bearer auth is enabled if
-    ``EVENTOR_MCP_BEARER_TOKEN`` is set. Stdio transport should use ``http_auth=False`` so local
+    When ``http_auth`` is True (SSE / streamable-http), Bearer auth and a public origin are required unless
+    ``ALLOW_INSECURE_HTTP`` explicitly enables loopback development. Stdio transport should use ``http_auth=False`` so local
     clients are unaffected by Mistral connector secrets in ``.env``.
     """
 
@@ -388,6 +401,6 @@ def create_mcp(settings: Settings, *, http_auth: bool = False) -> FastMCP:
         token_verifier=verifier,
         transport_security=transport_security,
     )
-    register_mcp_discovery_routes(mcp, settings)
+    register_mcp_discovery_routes(mcp, settings, transport=http_transport)
     register_eventor_tools(mcp)
     return mcp

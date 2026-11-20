@@ -24,7 +24,14 @@ class Settings(BaseSettings):
     )
     eventor_api_key: str = Field(default="", validation_alias="EVENTOR_API_KEY")
     eventor_api_key_header: str = Field(default="ApiKey", validation_alias="EVENTOR_API_KEY_HEADER")
-    eventor_timeout_seconds: float = Field(default=30.0, validation_alias="EVENTOR_TIMEOUT_SECONDS")
+    eventor_timeout_seconds: float = Field(default=30.0, gt=0, validation_alias="EVENTOR_TIMEOUT_SECONDS")
+
+    api_max_date_range_days: int = Field(default=730, ge=1, validation_alias="API_MAX_DATE_RANGE_DAYS")
+    api_max_response_bytes: int = Field(default=4_000_000, ge=1, validation_alias="API_MAX_RESPONSE_BYTES")
+    api_max_concurrent_requests: int = Field(default=4, ge=1, validation_alias="API_MAX_CONCURRENT_REQUESTS")
+    api_requests_per_minute: int = Field(default=60, ge=1, validation_alias="API_REQUESTS_PER_MINUTE")
+    cache_max_bytes: int = Field(default=32_000_000, ge=1, validation_alias="CACHE_MAX_BYTES")
+    allow_insecure_http: bool = Field(default=False, validation_alias="ALLOW_INSECURE_HTTP")
 
     cache_enabled: bool = Field(default=True, validation_alias="CACHE_ENABLED")
     cache_ttl_seconds: int = Field(default=300, ge=0, validation_alias="CACHE_TTL_SECONDS")
@@ -49,6 +56,11 @@ class Settings(BaseSettings):
     @classmethod
     def strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("log_dir", mode="before")
+    @classmethod
+    def empty_log_dir(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("log_level")
     @classmethod

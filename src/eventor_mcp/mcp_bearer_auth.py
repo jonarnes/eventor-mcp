@@ -1,4 +1,4 @@
-"""Optional Bearer token auth for HTTP/SSE MCP (e.g. Mistral Le Chat connectors)."""
+"""Bearer token auth for HTTP/SSE MCP (e.g. Mistral Le Chat connectors)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import secrets
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
+from urllib.parse import urlparse
 
 from eventor_mcp.config import Settings
 
@@ -32,7 +33,7 @@ class StaticBearerTokenVerifier:
 
 def http_mcp_auth_from_settings(settings: Settings) -> tuple[AuthSettings | None, TokenVerifier | None]:
     """
-    If EVENTOR_MCP_BEARER_TOKEN is set, return AuthSettings + verifier for FastMCP HTTP transports.
+    Require Bearer auth, unless explicitly opting into insecure loopback development.
 
     FastMCP requires AuthSettings (issuer + resource URLs) when enabling token_verifier; for a shared
     static token these can both point at the public base URL of this MCP server (same URL Mistral uses
@@ -41,7 +42,10 @@ def http_mcp_auth_from_settings(settings: Settings) -> tuple[AuthSettings | None
 
     token = settings.mcp_bearer_token.strip()
     if not token:
-        return None, None
+        if settings.allow_insecure_http:
+            return None, None
+        raise ValueError("HTTP MCP requires EVENTOR_MCP_BEARER_TOKEN and EVENTOR_MCP_PUBLIC_URL. "
+                         "For loopback development only, explicitly set ALLOW_INSECURE_HTTP=true.")
 
     base = settings.mcp_public_url.strip().rstrip("/")
     if not base:
@@ -51,6 +55,11 @@ def http_mcp_auth_from_settings(settings: Settings) -> tuple[AuthSettings | None
             "(e.g. http://your-host.sslip.io), without a path unless you use one consistently."
         )
 
+    parsed = urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("EVENTOR_MCP_PUBLIC_URL must be an HTTP(S) origin without path, credentials, query or fragment")
+    if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise ValueError("EVENTOR_MCP_PUBLIC_URL must use HTTPS for public deployments")
     issuer = AnyHttpUrl(base)
     resource = AnyHttpUrl(base)
     auth = AuthSettings(

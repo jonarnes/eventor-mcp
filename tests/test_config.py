@@ -11,3 +11,7 @@ def test_rejects_key_pasted_into_header_field() -> None:
             EVENTOR_API_KEY="",
             EVENTOR_API_KEY_HEADER="3a9a3b1cbfdf464e9872031c09203c76",
         )
+
+
+def test_empty_log_directory_disables_file_logging():
+    assert Settings(_env_file=None, LOG_DIR="").log_dir is None

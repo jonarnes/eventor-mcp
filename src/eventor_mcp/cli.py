@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from ipaddress import ip_address
+from typing import Any, Awaitable
 
 import typer
 
@@ -15,6 +16,17 @@ from eventor_mcp.runtime import get_runtime, init_runtime, reset_runtime
 from eventor_mcp.server import create_mcp
 
 log = logging.getLogger(__name__)
+
+
+def _validate_http_bind(settings: Settings, host: str) -> None:
+    if not settings.allow_insecure_http:
+        return
+    try:
+        loopback = ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    if not loopback:
+        raise ValueError("ALLOW_INSECURE_HTTP may only bind to a loopback address")
 
 
 def _listen_port(explicit: int | None, *, fallback: int = 8000) -> int:
@@ -44,12 +56,8 @@ def serve() -> None:
 
     settings = Settings()
     setup_logging(settings)
-    init_runtime(settings)
     mcp = create_mcp(settings, http_auth=False)
-    try:
-        mcp.run(transport="stdio")
-    finally:
-        asyncio.run(_aclose_runtime())
+    asyncio.run(_run_server(settings, mcp.run_stdio_async()))
 
 
 @app.command("serve-sse")
@@ -76,9 +84,9 @@ def serve_sse(
 
     settings = Settings()
     setup_logging(settings)
-    init_runtime(settings)
     try:
-        mcp = create_mcp(settings, http_auth=True)
+        _validate_http_bind(settings, host)
+        mcp = create_mcp(settings, http_auth=True, http_transport="sse")
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
@@ -90,10 +98,7 @@ def serve_sse(
         log.info(
             "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
         )
-    try:
-        mcp.run(transport="sse", mount_path=mount_path)
-    finally:
-        asyncio.run(_aclose_runtime())
+    asyncio.run(_run_server(settings, mcp.run_sse_async(mount_path=mount_path)))
 
 
 @app.command("serve-http")
@@ -109,9 +114,9 @@ def serve_http(
 
     settings = Settings()
     setup_logging(settings)
-    init_runtime(settings)
     try:
-        mcp = create_mcp(settings, http_auth=True)
+        _validate_http_bind(settings, host)
+        mcp = create_mcp(settings, http_auth=True, http_transport="streamable-http")
     except ValueError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
@@ -123,10 +128,16 @@ def serve_http(
         log.info(
             "MCP HTTP Bearer auth enabled; send the same value as Authorization: Bearer in Mistral."
         )
+    asyncio.run(_run_server(settings, mcp.run_streamable_http_async()))
+
+
+async def _run_server(settings: Settings, server: Awaitable[None]) -> None:
+    # Create, use and close HTTP connection pools on the same event loop.
+    init_runtime(settings)
     try:
-        mcp.run(transport="streamable-http")
+        await server
     finally:
-        asyncio.run(_aclose_runtime())
+        await _aclose_runtime()
 
 
 def _json_dump(data: Any) -> None:
@@ -165,8 +176,8 @@ def test_ping(
 
 @test_app.command("events")
 def test_events(
-    from_date: str = typer.Option("0000-01-01 00:00:00", "--from-date"),
-    to_date: str = typer.Option("9999-12-31 23:59:59", "--to-date"),
+    from_date: str | None = typer.Option(None, "--from-date"),
+    to_date: str | None = typer.Option(None, "--to-date"),
     organisation_ids: str | None = typer.Option(None, "--organisation-ids"),
     no_cache: bool = typer.Option(False, "--no-cache"),
 ) -> None:

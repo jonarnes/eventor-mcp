@@ -14,10 +14,13 @@ def element_to_structure(elem: ET.Element) -> Any:
     """Convert an XML element to dict/list/str structures."""
 
     children = list(elem)
-    if not children:
+    if not children and not elem.attrib:
         return (elem.text or "").strip()
 
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = {f"@{_strip_tag(k)}": v for k, v in elem.attrib.items()}
+    text = (elem.text or "").strip()
+    if text:
+        out["#text"] = text
     for child in children:
         name = _strip_tag(child.tag)
         val = element_to_structure(child)
@@ -32,7 +35,7 @@ def element_to_structure(elem: ET.Element) -> Any:
     return out
 
 
-def parse_eventor_xml(xml_text: str) -> Any:
+def parse_eventor_xml(xml_text: str | bytes) -> Any:
     """Parse Eventor XML response body."""
 
     text = xml_text.strip()

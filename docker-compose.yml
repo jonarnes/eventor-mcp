@@ -2,16 +2,11 @@ services:
   eventor-mcp:
     build: .
     image: eventor-mcp:local
-    # Local stdio MCP (Cursor). The image default CMD is serve-sse for Coolify/Traefik.
+    # Local stdio MCP (Cursor). The image default CMD is serve-http for Coolify/Traefik.
     command: ["serve"]
     env_file:
       - .env
     stdin_open: true
     tty: true
     environment:
-      LOG_DIR: /var/log/eventor-mcp
-    volumes:
-      - eventor_mcp_logs:/var/log/eventor-mcp
-
-volumes:
-  eventor_mcp_logs:
+      LOG_DIR: ""

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from collections import deque
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -8,6 +12,7 @@ import httpx
 from eventor_mcp.cache import ResponseCache, cache_key
 from eventor_mcp.config import Settings
 from eventor_mcp.xml_parse import parse_eventor_xml
+from eventor_mcp.statistics import resolve_date_range
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +34,8 @@ class EventorClient:
     ) -> None:
         self._settings = settings
         self._cache = cache
+        self._semaphore = asyncio.Semaphore(settings.api_max_concurrent_requests)
+        self._request_times: deque[float] = deque()
         self._owns_client = http_client is None
         headers: dict[str, str] = {}
         if settings.eventor_api_key:
@@ -56,6 +63,7 @@ class EventorClient:
         """GET endpoint returning parsed XML as dict/list structures."""
 
         path = path if path.startswith("/") else f"/{path}"
+        params = self._bounded_params(path, params or {})
         params = _normalize_params(params)
         ck = cache_key("GET", path, params)
         if use_cache and self._settings.cache_enabled:
@@ -66,24 +74,53 @@ class EventorClient:
 
         log.info("GET %s", path)
         try:
-            r = await self._client.get(path, params=params)
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            body = (e.response.text or "")[:500]
-            if e.response.status_code == 403 and "<title>403" in body and not self._settings.eventor_api_key.strip():
-                raise RuntimeError(
-                    f"HTTP 403 for {path}. The API key may be missing: set EVENTOR_API_KEY in .env "
-                    "(the secret from Eventor). EVENTOR_API_KEY_HEADER should be the header *name* "
-                    "(usually ApiKey), not the key value."
-                ) from e
-            raise RuntimeError(f"HTTP {e.response.status_code} for {path}: {body}") from e
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Request failed for {path}: {e}") from e
+            # Includes waiting for capacity and reading the entire response body.
+            async with asyncio.timeout(self._settings.eventor_timeout_seconds):
+                async with self._semaphore:
+                    now = time.monotonic()
+                    while self._request_times and self._request_times[0] <= now - 60:
+                        self._request_times.popleft()
+                    if len(self._request_times) >= self._settings.api_requests_per_minute:
+                        raise RuntimeError("Eventor request rate limit reached; retry in one minute")
+                    self._request_times.append(now)
+                    async with self._client.stream("GET", path, params=params) as r:
+                        if r.status_code >= 400:
+                            # Do not echo upstream response bodies containing personal data.
+                            raise RuntimeError(f"HTTP {r.status_code} for {path}")
+                        limit = self._settings.api_max_response_bytes
+                        body = bytearray()
+                        async for chunk in r.aiter_bytes(chunk_size=65536):
+                            if len(body) + len(chunk) > limit:
+                                raise RuntimeError(f"Response for {path} exceeds API_MAX_RESPONSE_BYTES ({limit}); narrow the query")
+                            body.extend(chunk)
+                    parsed = parse_eventor_xml(bytes(body))
+        except (httpx.RequestError, TimeoutError) as e:
+            raise RuntimeError(f"Request failed or timed out for {path}: {e}") from e
 
-        parsed = parse_eventor_xml(r.text)
         if use_cache and self._settings.cache_enabled:
             self._cache.set(ck, parsed)
         return parsed
+
+    def _bounded_params(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        params = dict(params)
+        if path in {"/api/events", "/api/entries", "/api/results/person", "/api/starts/person"}:
+            start_key, end_key = (("fromEventDate", "toEventDate") if path == "/api/entries" else ("fromDate", "toDate"))
+            start, end = params.get(start_key), params.get(end_key)
+            if start is None and end is None and path != "/api/results/person":
+                start = datetime.now().strftime("%Y-%m-%d")
+            start, end = resolve_date_range(
+                start, end, max_days=self._settings.api_max_date_range_days,
+                default_days=365 if path == "/api/results/person" else 30,
+            )
+            params[start_key], params[end_key] = start, end
+        for key, value in params.items():
+            if value is not None and key.endswith("Ids"):
+                ids = str(value).split(",")
+                if len(ids) > 100 or any(not item.strip().isdigit() or int(item) < 1 for item in ids):
+                    raise ValueError(f"{key} must contain at most 100 positive comma-separated IDs")
+        if params.get("top") is not None and not 1 <= params["top"] <= 1000:
+            raise ValueError("top must be between 1 and 1000")
+        return params
 
 
 def _normalize_params(params: dict[str, Any] | None) -> dict[str, Any]:

@@ -1,70 +1,46 @@
+import pytest
 from starlette.testclient import TestClient
-
 from eventor_mcp.config import Settings
 from eventor_mcp.server import create_mcp
 
 
-def test_server_card_uses_configured_public_url() -> None:
-    settings = Settings(
-        _env_file=None,
-        EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test",
-        EVENTOR_MCP_BEARER_TOKEN="",
-    )
-    mcp = create_mcp(settings, http_auth=False)
-    app = mcp.sse_app()
-    client = TestClient(app)
-    for path in (
-        "/.well-known/mcp/server-card",
-        "/.well-known/mcp/server-card/",
-        "/.well-known/mcp/server-card.json",
-    ):
-        r = client.get(path)
-        assert r.status_code == 200, path
-        data = r.json()
-        assert data["name"] == "io.github.jonarnes/eventor-mcp"
-        sse = next(x for x in data["remotes"] if x["type"] == "sse")
-        assert sse["url"] == "https://mcp.example.test/sse"
+@pytest.mark.parametrize("transport,path,other", [("sse", "/sse", "/mcp"), ("streamable-http", "/mcp", "/sse")])
+def test_discovery_advertises_only_active_transport(transport, path, other):
+    settings = Settings(_env_file=None, EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test", EVENTOR_MCP_BEARER_TOKEN="secret")
+    mcp = create_mcp(settings, http_auth=True, http_transport=transport)
+    app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
+    with TestClient(app) as client:
+        for card_path in ("/.well-known/mcp/server-card", "/.well-known/mcp/server-card/", "/.well-known/mcp/server-card.json"):
+            r = client.get(card_path)
+            assert r.status_code == 200
+            assert r.json()["remotes"] == [{"type": transport, "url": f"https://mcp.example.test{path}",
+                                           "authentication": {"required": True, "schemes": ["bearer"]}}]
+        assert client.get(other).status_code == 404
+        for fake in ("/.well-known/oauth-authorization-server", "/authorize", "/token"):
+            assert client.get(fake).status_code == 404
+        assert client.get("/health").json() == {"status": "ok"}
 
 
-def test_server_card_shows_bearer_when_token_set() -> None:
-    settings = Settings(
-        _env_file=None,
-        EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test",
-        EVENTOR_MCP_BEARER_TOKEN="secret",
-    )
-    mcp = create_mcp(settings, http_auth=False)
-    client = TestClient(mcp.sse_app())
-    r = client.get("/.well-known/mcp/server-card")
-    auth = r.json()["remotes"][0]["authentication"]
-    assert auth["required"] is True
-    assert "bearer" in auth["schemes"]
-
-
-def test_oauth_authorization_server_absent_without_bearer() -> None:
-    settings = Settings(
-        _env_file=None,
-        EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test",
-        EVENTOR_MCP_BEARER_TOKEN="",
-    )
-    mcp = create_mcp(settings, http_auth=False)
-    client = TestClient(mcp.sse_app())
-    assert client.get("/.well-known/oauth-authorization-server").status_code == 404
-
-
-def test_oauth_authorization_server_metadata_when_bearer_set() -> None:
-    settings = Settings(
-        _env_file=None,
-        EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test",
-        EVENTOR_MCP_BEARER_TOKEN="secret",
-    )
+def test_insecure_local_discovery_does_not_trust_forwarded_host():
+    settings = Settings(_env_file=None, ALLOW_INSECURE_HTTP=True, EVENTOR_MCP_PUBLIC_URL="", EVENTOR_MCP_BEARER_TOKEN="")
     mcp = create_mcp(settings, http_auth=True)
-    client = TestClient(mcp.sse_app())
-    r = client.get("/.well-known/oauth-authorization-server")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["issuer"] == "https://mcp.example.test"
-    assert data["authorization_endpoint"] == "https://mcp.example.test/authorize"
-    assert data["token_endpoint"] == "https://mcp.example.test/token"
-    assert data["response_types_supported"] == ["code"]
-    opt = client.options("/.well-known/oauth-authorization-server")
-    assert opt.status_code == 204
+    with TestClient(mcp.streamable_http_app()) as client:
+        r = client.get("/.well-known/mcp/server-card", headers={"X-Forwarded-Host": "evil.test"})
+        assert r.json()["remotes"][0]["url"] == "http://127.0.0.1:8000/mcp"
+
+
+def test_streamable_http_authentication_and_initialize():
+    settings = Settings(_env_file=None, EVENTOR_MCP_PUBLIC_URL="https://mcp.example.test", EVENTOR_MCP_BEARER_TOKEN="secret")
+    mcp = create_mcp(settings, http_auth=True)
+    headers = {"Host": "mcp.example.test", "Accept": "application/json, text/event-stream"}
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"},
+    }}
+    with TestClient(mcp.streamable_http_app()) as client:
+        assert client.post("/mcp", headers=headers, json=init).status_code == 401
+        assert client.post("/mcp", headers={**headers, "Authorization": "Bearer wrong"}, json=init).status_code == 401
+        r = client.post("/mcp", headers={**headers, "Authorization": "Bearer secret"}, json=init)
+        assert r.status_code == 200
+        assert '"serverInfo"' in r.text
+        assert r.headers.get("mcp-session-id")
+        assert client.post("/mcp", headers={**headers, "Authorization": "Bearer secret", "Host": "attacker.test"}, json=init).status_code == 421
